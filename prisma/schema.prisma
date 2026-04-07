@@ -1,0 +1,478 @@
+// RetireOS CFP - Prisma Schema
+// Israeli Financial Planning SaaS for CFPs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// MULTI-TENANT CORE
+// ============================================================
+
+model Org {
+  id          String   @id @default(uuid())
+  name        String
+  timezone    String   @default("Asia/Jerusalem")
+  theme       String   @default("dark")
+  branding    Json?
+  reportTemplates Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  households  Household[]
+  rulesets    Ruleset[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  orgId     String
+  email     String   @unique
+  name      String
+  role      UserRole @default(CLIENT)
+  password  String
+  mfaEnabled Boolean @default(false)
+  mfaSecret  String?
+  auditFlags Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org       Org      @relation(fields: [orgId], references: [id])
+  advisedHouseholds Household[] @relation("AdvisorHouseholds")
+  clientHousehold   Household?  @relation("ClientHousehold")
+}
+
+enum UserRole {
+  CLIENT
+  ADVISOR
+  ADMIN
+}
+
+// ============================================================
+// HOUSEHOLD & PLANNING
+// ============================================================
+
+model Household {
+  id              String   @id @default(uuid())
+  orgId           String
+  primaryPersonId String?
+  partnerPersonId String?
+  dependents      Json?    // array of dependent info
+  residency       String?
+  taxResidency    String?
+  advisorId       String?
+  clientUserId    String?  @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  org             Org      @relation(fields: [orgId], references: [id])
+  advisor         User?    @relation("AdvisorHouseholds", fields: [advisorId], references: [id])
+  clientUser      User?    @relation("ClientHousehold", fields: [clientUserId], references: [id])
+  persons         Person[]
+  plans           Plan[]
+}
+
+model Person {
+  id              String   @id @default(uuid())
+  householdId     String
+  role            PersonRole
+  firstName       String
+  lastName        String
+  birthDate       DateTime
+  gender          String?
+  lifeExpectancy  Int?
+  healthFlags     Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  household       Household @relation(fields: [householdId], references: [id])
+}
+
+enum PersonRole {
+  PRIMARY
+  PARTNER
+  DEPENDENT
+}
+
+model Plan {
+  id              String   @id @default(uuid())
+  householdId     String
+  name            String
+  status          PlanStatus @default(DRAFT)
+  workflowState   String   @default("discovery")
+  tasks           Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  household       Household @relation(fields: [householdId], references: [id])
+  scenarios       Scenario[]
+}
+
+enum PlanStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETE
+  ARCHIVED
+}
+
+model Scenario {
+  id              String   @id @default(uuid())
+  planId          String
+  name            String
+  isBase          Boolean  @default(false)
+  cloneFromId     String?
+  archivedAt      DateTime?
+  globalInflation Float    @default(2.5)
+  globalReturn    Float    @default(5.0)
+  globalMgmtFee   Float    @default(0.6)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  plan            Plan     @relation(fields: [planId], references: [id])
+  versions        ScenarioVersion[]
+  goals           Goal[]
+  assets          Asset[]
+  liabilities     Liability[]
+  incomeStreams    IncomeStream[]
+  expenseStreams   ExpenseStream[]
+  contribSchedules ContribSchedule[]
+  retirementEvents RetirementEvent[]
+  forms           Form[]
+  simulationRuns  SimulationRun[]
+}
+
+model ScenarioVersion {
+  id          String   @id @default(uuid())
+  scenarioId  String
+  versionNo   Int
+  diffJson    Json?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  scenario    Scenario @relation(fields: [scenarioId], references: [id])
+}
+
+// ============================================================
+// FINANCIAL DATA
+// ============================================================
+
+model Goal {
+  id          String   @id @default(uuid())
+  scenarioId  String
+  type        GoalType
+  targetDate  DateTime?
+  targetAge   Int?
+  amount      Float
+  priority    Int?
+  probability Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  scenario    Scenario @relation(fields: [scenarioId], references: [id])
+}
+
+enum GoalType {
+  RETIREMENT
+  EDUCATION
+  HOUSING
+  TRAVEL
+  EMERGENCY
+  INHERITANCE
+  OTHER
+}
+
+model Asset {
+  id          String    @id @default(uuid())
+  scenarioId  String
+  type        AssetType
+  name        String
+  valueNow    Float
+  currency    String    @default("ILS")
+  costBasis   Float?
+  liquidity   String?
+  taxRegime   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  scenario    Scenario  @relation(fields: [scenarioId], references: [id])
+  assumptions AssetAssumption?
+  contribs    ContribSchedule[]
+}
+
+enum AssetType {
+  PENSION_FUND        // קרן פנסיה
+  PROVIDENT_FUND      // קופת גמל
+  STUDY_FUND          // קרן השתלמות
+  STOCKS              // מניות
+  BONDS               // אגרות חוב
+  REAL_ESTATE         // נדלן
+  CASH                // מזומן
+  SAVINGS             // חיסכון
+  BUSINESS            // עסק
+  OTHER
+}
+
+model AssetAssumption {
+  id            String  @id @default(uuid())
+  assetId       String  @unique
+  expReturn     Float   @default(5.0)
+  mgmtFee       Float   @default(0.6)
+  vol           Float?
+  correlation   Float?
+  lotMethod     String  @default("FIFO")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  asset         Asset   @relation(fields: [assetId], references: [id])
+}
+
+model Liability {
+  id          String        @id @default(uuid())
+  scenarioId  String
+  type        LiabilityType
+  name        String
+  balance     Float
+  rate        Float
+  payment     Float
+  endDate     DateTime?
+  indexation  String?
+  earlyPay    Boolean?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  scenario    Scenario      @relation(fields: [scenarioId], references: [id])
+}
+
+enum LiabilityType {
+  MORTGAGE       // משכנתא
+  CAR_LOAN       // הלוואת רכב
+  PERSONAL_LOAN  // הלוואה אישית
+  CREDIT_CARD    // כרטיס אשראי
+  OTHER
+}
+
+model IncomeStream {
+  id          String      @id @default(uuid())
+  scenarioId  String
+  type        IncomeType
+  name        String
+  amount      Float
+  freq        Frequency   @default(MONTHLY)
+  startRule   Json        // {type: "now|date|age|retire_early|one_time", value: "..."}
+  endRule     Json        // {type: "forever|date|age|retire_early|one_time", value: "..."}
+  growth      Float?
+  taxTreatment String?
+  niTreatment  String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  scenario    Scenario    @relation(fields: [scenarioId], references: [id])
+}
+
+enum IncomeType {
+  SALARY          // שכר עבודה
+  SELF_EMPLOYED   // עצמאי
+  RENTAL          // שכירות
+  DIVIDEND        // דיבידנד
+  PENSION_INCOME  // קצבת פנסיה
+  SOCIAL_SECURITY // ביטוח לאומי
+  ANNUITY         // קצבה
+  OTHER
+}
+
+model ExpenseStream {
+  id          String      @id @default(uuid())
+  scenarioId  String
+  category    String
+  amount      Float
+  freq        Frequency   @default(MONTHLY)
+  startRule   Json
+  endRule     Json
+  phase       String?
+  inflationLink Boolean   @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  scenario    Scenario    @relation(fields: [scenarioId], references: [id])
+}
+
+model ContribSchedule {
+  id          String    @id @default(uuid())
+  scenarioId  String
+  assetId     String
+  amount      Float
+  freq        Frequency @default(MONTHLY)
+  startRule   Json
+  endRule     Json
+  stepUps     Json?
+  employerSplit Float?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  scenario    Scenario  @relation(fields: [scenarioId], references: [id])
+  asset       Asset     @relation(fields: [assetId], references: [id])
+}
+
+enum Frequency {
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+  ONE_TIME
+}
+
+model RetirementEvent {
+  id          String    @id @default(uuid())
+  scenarioId  String
+  type        String    // "early_retirement", "pension_start", "ni_start", etc.
+  date        DateTime?
+  age         Int?
+  amount      Float?
+  markers     Json?
+  capitalization161 Boolean @default(false)
+  createdAt   DateTime  @default(now())
+
+  scenario    Scenario  @relation(fields: [scenarioId], references: [id])
+}
+
+model Form {
+  id          String    @id @default(uuid())
+  scenarioId  String
+  formType    String    // "101", "1161", "135"
+  status      FormStatus @default(PENDING)
+  keyFields   Json?
+  attachments Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  scenario    Scenario  @relation(fields: [scenarioId], references: [id])
+}
+
+enum FormStatus {
+  PENDING
+  IN_PROGRESS
+  SUBMITTED
+  APPROVED
+}
+
+// ============================================================
+// RULES BY YEAR (Israeli Tax & NI Rules)
+// ============================================================
+
+model Ruleset {
+  id            String   @id @default(uuid())
+  orgId         String?
+  year          Int
+  version       Int      @default(1)
+  effectiveFrom DateTime
+  publishedBy   String?
+  createdAt     DateTime @default(now())
+
+  org           Org?     @relation(fields: [orgId], references: [id])
+  taxRules      TaxRule[]
+  niRules       NiRule[]
+}
+
+model TaxRule {
+  id            String  @id @default(uuid())
+  rulesetId     String
+  brackets      Json    // [{min, max, rate}]
+  creditValue   Float   // שווי נקודת זיכוי
+  capgains      Float   // מס רווחי הון
+  dividends     Float   // מס דיבידנד
+  rentalTracks  Json?   // מסלולי השכרה
+  surtax        Float?
+  pensionParams Json?
+  createdAt     DateTime @default(now())
+
+  ruleset       Ruleset @relation(fields: [rulesetId], references: [id])
+}
+
+model NiRule {
+  id            String  @id @default(uuid())
+  rulesetId     String
+  thresholds    Json    // {low, high}
+  rates         Json    // {employee_low, employee_high, employer}
+  oldAgeTables  Json?
+  deferralBonus Float?
+  supplement    Json?
+  createdAt     DateTime @default(now())
+
+  ruleset       Ruleset @relation(fields: [rulesetId], references: [id])
+}
+
+// ============================================================
+// SIMULATION & RESULTS
+// ============================================================
+
+model SimulationRun {
+  id                String        @id @default(uuid())
+  scenarioVersionId String?
+  scenarioId        String
+  rulesetId         String?
+  status            SimStatus     @default(PENDING)
+  runType           String        @default("annual") // annual, monthly
+  engineVersions    Json?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime      @default(now())
+
+  scenario          Scenario      @relation(fields: [scenarioId], references: [id])
+  yearResults       YearResult[]
+  insights          Insight[]
+}
+
+enum SimStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+model YearResult {
+  id              String        @id @default(uuid())
+  runId           String
+  year            Int
+  netWorthOpen    Float
+  netWorthClose   Float
+  taxes           Float
+  ni              Float
+  cashflow        Float
+  breakdownBySource Json?
+  createdAt       DateTime      @default(now())
+
+  run             SimulationRun @relation(fields: [runId], references: [id])
+}
+
+model Insight {
+  id              String        @id @default(uuid())
+  runId           String
+  type            InsightType
+  severity        Severity
+  message         String
+  recommendationAction String?
+  createdAt       DateTime      @default(now())
+
+  run             SimulationRun @relation(fields: [runId], references: [id])
+}
+
+enum InsightType {
+  TAX_OPTIMIZATION
+  PENSION_ALERT
+  CASHFLOW_WARNING
+  SEQUENCE_RISK
+  WITHDRAWAL_ADVICE
+  FORMS_REMINDER
+  GENERAL
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+  SUCCESS
+}
