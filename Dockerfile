@@ -1,45 +1,44 @@
-# Build stage
-FROM node:20-alpine AS builder
+# ============================================================
+# RetireOS CFP - Multi-stage Dockerfile
+# ============================================================
 
-WORKDIR /app
-
-# Copy package files
-COPY package.json package-lock.json ./
-COPY server/package.json server/
-COPY client/package.json client/
-
-# Install dependencies
-RUN npm ci
-
-# Build client
+# Stage 1: Build client
+FROM node:20-alpine AS client-builder
 WORKDIR /app/client
-RUN npm ci
+COPY client/package*.json ./
+RUN npm ci --silent
+COPY client/ ./
 RUN npm run build
 
-# Build server
+# Stage 2: Build server
+FROM node:20-alpine AS server-builder
 WORKDIR /app/server
-RUN npm ci
+COPY server/package*.json ./
+RUN npm ci --silent
+COPY server/ ./
+RUN npx tsc
 
-# Production stage
-FROM node:20-alpine
-
+# Stage 3: Production
+FROM node:20-alpine AS production
+RUN apk add --no-cache dumb-init
 WORKDIR /app
 
-# Copy server files
-COPY --from=builder /app/server /app/server
-COPY --from=builder /app/server/node_modules /app/server/node_modules
+# Copy server dist + node_modules
+COPY --from=server-builder /app/server/dist ./server/dist
+COPY --from=server-builder /app/server/node_modules ./server/node_modules
+COPY --from=server-builder /app/server/package.json ./server/package.json
 
-# Copy built client
-COPY --from=builder /app/client/dist /app/client/dist
+# Copy Prisma schema and client
+COPY prisma ./prisma
+RUN cd /app/server && npx prisma generate
 
-# Copy prisma schema and migrations
-COPY prisma /app/prisma
+# Copy built React client
+COPY --from=client-builder /app/client/dist ./client/dist
 
-# Set environment
 ENV NODE_ENV=production
 ENV PORT=3000
 
-WORKDIR /app/server
+EXPOSE 3000
 
-# Run migrations and start server
-CMD ["sh", "-c", "npx prisma migrate deploy && npm start"]
+# Migrate DB and start
+CMD ["sh", "-c", "cd /app/server && npx prisma migrate deploy --schema=/app/prisma/schema.prisma && node dist/index.js"]
