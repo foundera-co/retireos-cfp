@@ -15,6 +15,9 @@ FROM node:20-alpine AS server-builder
 WORKDIR /app/server
 COPY server/package*.json ./
 RUN npm ci --silent
+# Copy prisma schema before generating client
+COPY prisma /app/prisma
+RUN npx prisma generate --schema=/app/prisma/schema.prisma
 COPY server/ ./
 RUN npx tsc
 
@@ -23,14 +26,13 @@ FROM node:20-alpine AS production
 RUN apk add --no-cache dumb-init
 WORKDIR /app
 
-# Copy server dist + node_modules
+# Copy server dist + node_modules (includes generated Prisma client)
 COPY --from=server-builder /app/server/dist ./server/dist
 COPY --from=server-builder /app/server/node_modules ./server/node_modules
 COPY --from=server-builder /app/server/package.json ./server/package.json
 
-# Copy Prisma schema and client
+# Copy Prisma schema for migrations at runtime
 COPY prisma ./prisma
-RUN cd /app/server && npx prisma generate
 
 # Copy built React client
 COPY --from=client-builder /app/client/dist ./client/dist
