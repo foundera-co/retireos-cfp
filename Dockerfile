@@ -8,7 +8,7 @@ WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci --silent
 COPY client/ ./
-RUN npm run build
+RUN NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
 # Stage 2: Build server
 FROM node:20-alpine AS server-builder
